@@ -1,0 +1,208 @@
+---
+title: "p8105_hw5_JL6047"
+author: "Eric Luo"
+date: "2022-11-17"
+output: html_document
+---
+Load Packages
+```{r}
+library(tidyverse)
+library(viridis)
+library(dplyr)
+library(purrr)
+```
+
+
+Problem#2
+
+Read file, and create a new variable "city_state" according to instruction
+```{r}
+raw = read_csv(file = "./homicide-data.csv")
+raw$city_state = paste(raw$city,raw$state,sep=", ")
+```
+Rearrange the data,filter out the mistaken parameter where Tulsa is located in OK not AL
+
+```{r}
+
+homicide_city = raw%>%
+  select(city_state,everything())%>%
+  filter(city_state != "Tulsa, AL")
+
+```
+
+Count numbers of homicides and unsolved cases for each city
+
+```{r}
+
+Summary = homicide_city%>%
+group_by(city_state) %>%
+  summarise(homicides = n(),
+            unsolved_homicides = sum(disposition != "Closed by arrest")) 
+```
+
+Run prop.test on Baltimore and pull out CIs'
+```{r}
+Bal_test = prop.test(
+  x = Summary %>% filter(city_state == "Baltimore, MD") %>% pull(unsolved_homicides), 
+  n = Summary %>% filter(city_state == "Baltimore, MD") %>% pull(homicides)
+) 
+
+Bal_test
+
+Bal_test %>% broom::tidy()
+
+est_prop = Bal_test %>% broom::tidy() %>%
+  pull(estimate) %>%
+  round(digit = 3)
+conf_low = Bal_test %>% broom::tidy() %>%
+  pull(conf.low) %>%
+  round(digit = 3)
+conf_high = Bal_test %>% broom::tidy() %>%
+  pull(conf.high) %>%
+  round(digit = 3)
+```
+
+
+Extract both the proportion of unsolved homicides and the confidence interval for each. Do this within a “tidy” pipeline, making use of purrr::map, purrr::map2, list columns and unnest as necessary to create a tidy dataframe with estimated proportions and CIs for each city.
+```{r}
+
+
+All_test = 
+  Summary %>% 
+  mutate(prop_test = map2(.x = unsolved_homicides, .y = homicides, ~prop.test(x = .x, n = .y)),
+         tidy_test = map(.x = prop_test, ~broom::tidy(.x))) %>% 
+  select(city_state, tidy_test) %>% 
+  unnest(tidy_test) %>% 
+  select(city_state, estimate, conf.low, conf.high)
+All_test
+
+```
+
+Create a plot that shows the estimates and CIs for each city – check out geom_errorbar for a way to add error bars based on the upper and lower limits. Organize cities according to the proportion of unsolved homicides.
+
+```{r}
+All_test %>%
+  mutate(city_state = fct_reorder(city_state, estimate)) %>%
+  ggplot(aes(x = city_state, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) +
+  labs(x = "City",
+       y = "Estimate",
+       title = "Estimates and Confidence Intervals of Porportion of Unsolved Homicides for Each City") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+  theme(plot.title = element_text(size = 15))
+```
+
+
+
+Problem#3
+
+Define a function that runs t test for the input data
+```{r}
+sim_t_test = function(n = 30, mu, sigma = 5){
+  sim_data = tibble(
+    x = rnorm(n, mean = mu, sd = sigma)
+  ) 
+  
+  test_data = t.test(sim_data, mu = 0, conf.level = 0.95)
+  
+  sim_data %>% 
+    summarize(
+      mu_hat = pull(broom::tidy(test_data), estimate),
+      p_val = pull(broom::tidy(test_data), p.value)
+    )
+}
+```
+run the function for 5000 times
+```{r}
+set.seed(1) 
+sim_results_df = 
+  tibble(mean = c(0:6)) %>% 
+  mutate(
+    output_lists = map(.x = mean, ~rerun(5000, sim_t_test(mu = .x))),
+    estimate_dfs = map(output_lists, bind_rows)
+  ) %>% 
+  select(-output_lists) %>% 
+  unnest(estimate_dfs)
+```
+
+Draw a plot showing proportion of rejected nulls on y-axis and true mu on x-axis
+According to the plot, the proportion of rejection of null increases with increasing effect size. There is a positive association between effect size and powers of test. And there association is stronger at smaller effect size.
+```{r}
+sim_results_df %>%
+  group_by(true_mean) %>%
+  summarise(
+    count = n(),
+    rej_num = sum(p_val < 0.05),
+    rej_prop = rej_num/count
+  ) %>%
+  ggplot(aes(x = true_mean, y = rej_prop)) +
+  geom_point() +
+  geom_line() + 
+  geom_text(aes(label = round(rej_prop, 3)), vjust = -1, size = 4) + 
+  scale_x_continuous(n.breaks = 10) +
+  scale_y_continuous(n.breaks = 6) +
+  labs(
+    title = "Size vs. Power",
+    x = "True Mean",
+    y = "Power"
+  )
+```
+
+
+Now we make the plot showing the average estimate of mu on  y-axis and the true value of mu on the x-axis.
+```{r}
+sim_results_df %>%
+  group_by(true_mean) %>%
+  summarise(
+    avg_mu_hat = mean(mu_hat)
+  ) %>%
+  ggplot(aes(x = true_mean, y = avg_mu_hat)) +
+  geom_point() +
+  geom_line() + 
+  geom_text(aes(label = round(avg_mu_hat, 3)), vjust = -1, size = 3) + 
+  scale_x_continuous(n.breaks = 6) +
+  scale_y_continuous(n.breaks = 6) +
+  labs(
+    title = "True Mean vs Average Estimate of Mean",
+    x = "True Mean",
+    y = "Average Estimate of Mean"
+  )
+```
+
+
+Overlay with a second plot to check on rejected samples with y-axis of estimate of mu and x-axis of true value
+```{r}
+overall_df = sim_results_df %>%
+  group_by(true_mean) %>%
+  summarise(
+    avg_mu_hat = mean(mu_hat)
+  ) 
+sim_results_df %>%
+  filter(p_val < 0.05) %>%
+  group_by(true_mean) %>%
+  summarise(
+    avg_mu_hat = mean(mu_hat)
+  ) %>%
+  ggplot(aes(x = true_mean, y = avg_mu_hat, color = "Rejected samples")) +
+  geom_point() +
+  geom_line() + 
+  geom_text(aes(label = round(avg_mu_hat, 3)), vjust = -1, size = 3) +
+  geom_point(data = overall_df, aes(x = true_mean, y = avg_mu_hat, color = "All samples")) +
+  geom_line(data = overall_df, aes(x = true_mean, y = avg_mu_hat, color = "All samples")) +  
+  geom_text(data = overall_df, aes(label = round(avg_mu_hat, 3), color = "All samples"), vjust = 2, size = 3) +
+  scale_x_continuous(n.breaks = 6) +
+  scale_y_continuous(n.breaks = 6) +
+  labs(
+    title = "Association Between True Mean and Average Estimate of Mean",
+    x = "True Mean",
+    y = "Average Estimate of Mean",
+    color = "Type"
+  ) +
+  scale_color_manual(values = c("All samples" = "black", "Rejected samples" = "red"))
+```
+
+From plot above, we can see that the sample average of mu across tests for all samples is approximately equal to the true value of mu.
+On the other side, however, the sample average of mu across rejection is only nearly equal when mu=4,5,6 but not for mu=1,2,3.
+So we reject the null hypothesis at larger mu's because of a larger effect size.
+
