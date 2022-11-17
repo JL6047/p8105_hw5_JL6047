@@ -2,7 +2,7 @@
 title: "p8105_hw5_JL6047"
 author: "Eric Luo"
 date: "2022-11-17"
-output: html_document
+output: github_document
 ---
 Load Packages
 ```{r}
